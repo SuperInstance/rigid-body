@@ -1,70 +1,104 @@
-# Rigid Body Dynamics
+# rigid-body
 
-A **rigid body** is an idealized solid object whose deformation is negligible under applied forces. This crate simulates 2D rigid body physics — translation, rotation, impulse-based collisions, and gravitational integration — using Newton-Euler equations of motion.
+**2D rigid body physics simulation** — impulse-based collision response, rotational dynamics, and gravitational integration.
+
+A from-scratch implementation of Newtonian rigid body mechanics in 2D, covering linear and angular dynamics, box-shaped collision detection against static boundaries, and impulse-based collision resolution with restitution.
 
 ## Why It Matters
 
-Rigid body dynamics is the foundation of every game physics engine, robotics simulator, and CAD motion analysis tool. Whether you're building a platformer, simulating a robotic arm, or analyzing vehicle crash dynamics, you need to integrate forces, resolve collisions, and conserve angular momentum. This crate demonstrates the complete pipeline: Euler integration of linear and angular velocity, impulse-based collision response with restitution, and the moment of inertia tensor for rectangular bodies.
+Rigid body dynamics is the foundation of game physics engines, robotics simulators, and mechanical CAD tools. Understanding the interplay of linear momentum ($m\mathbf{v}$), angular momentum ($I\omega$), and contact impulses is essential for any real-time simulation. This crate provides a minimal, readable implementation that maps directly to the governing equations — no magic numbers, no hidden solvers.
 
 ## How It Works
 
-The state of a 2D rigid body is described by position **p**, velocity **v**, angle θ, and angular velocity ω. The equations of motion are Newton's second law for translation and its rotational analogue:
+### State Representation
 
-```
-F = m·a        →    v₁ = v₀ + (F/m)·Δt
-τ = I·α        →    ω₁ = ω₀ + (τ/I)·Δt
-```
+A rigid body is described by:
 
-For a rectangular box of mass m, width w, and height h, the **moment of inertia** about the center is:
+$$\mathbf{q} = (\mathbf{x}, \theta, \mathbf{v}, \omega, m, I)$$
 
-```
-I = m·(w² + h²) / 12
-```
+where $\mathbf{x}$ is position, $\theta$ is orientation, $\mathbf{v}$ is linear velocity, $\omega$ is angular velocity, $m$ is mass, and $I$ is the moment of inertia.
 
-**Integration** uses the semi-implicit Euler method: update velocities first, then positions. Gravity adds `−g·Δt` to the vertical velocity each step. This is O(1) per body per timestep.
+### Moment of Inertia
 
-**Collision response** uses impulse-based resolution. When a corner penetrates the floor, the crate computes the contact normal **n**, the relative velocity at the contact point (including angular contribution `v_contact = v + ω × r`), and applies an impulse:
+For a rectangular box with width $w$ and height $h$:
 
-```
-j = −(1 + e) · (v·n) / (1/m + (r × n)² / I)
-```
+$$I = \frac{m(w^2 + h^2)}{12}$$
 
-where e is the coefficient of restitution (0.4 here, meaning 40% energy returned). The angular velocity changes by `(r × j·n) / I`, causing the box to tumble realistically. Each timestep is O(n) in the number of corners checked.
+This is the standard formula for a uniform-density rectangle rotating about its centroid.
+
+### Time Integration (Semi-Implicit Euler)
+
+Each timestep $\Delta t$:
+
+1. Apply gravity: $v_y \mathrel{-}= g \cdot \Delta t$
+2. Integrate position: $\mathbf{x} \mathrel{+=} \mathbf{v} \cdot \Delta t$
+3. Integrate angle: $\theta \mathrel{+=} \omega \cdot \Delta t$
+4. Check collisions and apply impulses
+
+### Collision Detection
+
+The body's 4 corners are computed via rotation:
+
+$$\mathbf{c}_i = \mathbf{x} + R(\theta) \cdot \mathbf{l}_i$$
+
+where $R(\theta)$ is the 2D rotation matrix and $\mathbf{l}_i$ are local-space corner offsets. Any corner with $y < y_{\text{floor}}$ triggers a collision response.
+
+### Impulse-Based Collision Response
+
+At each penetrating corner $\mathbf{c}$ with surface normal $\mathbf{n}$:
+
+1. Compute contact point velocity: $\mathbf{v}_{\text{contact}} = \mathbf{v} + \omega \times \mathbf{r}$ where $\mathbf{r} = \mathbf{c} - \mathbf{x}$
+2. Normal velocity: $v_n = \mathbf{v}_{\text{contact}} \cdot \mathbf{n}$
+3. If $v_n < 0$ (approaching), apply impulse:
+
+$$j = \frac{-(1 + e) v_n}{\frac{1}{m} + \frac{(\mathbf{r} \times \mathbf{n})^2}{I}}$$
+
+where $e$ is the coefficient of restitution (0.4 in this implementation).
+
+4. Update velocities: $\mathbf{v} \mathrel{+=} \frac{j \mathbf{n}}{m}$, $\omega \mathrel{+=} \frac{(\mathbf{r} \times j\mathbf{n})}{I}$
+
+### Damping
+
+Angular velocity is damped each step: $\omega \mathrel{*}= 0.999$ to prevent perpetual spin.
+
+**Big-O complexity**: Per timestep is $O(1)$ — fixed 4 corners, constant work. For $N$ bodies, $O(N^2)$ for pairwise collision (not implemented here; single body vs. static floor).
 
 ## Quick Start
 
-```rust
-// Simulate a 2×1 meter box falling under gravity
-fn main() {
-    let mut body = rigid_body::RigidBody::new(5.0, 10.0, 2.0, 1.0, 5.0);
-    for step in 0..300 {
-        body.step(0.01); // 10ms timestep
-    }
-    println!("Final position: ({:.2}, {:.2})", body.pos.0, body.pos.1);
-}
+```bash
+cargo run
 ```
+
+Runs a 300-step simulation (3 seconds at $\Delta t = 0.01$s) of a 2×1 meter, 5 kg box dropped from height with initial rotation. Prints position, angle, and angular velocity every 50 steps.
 
 ## API
 
-| Type | Description |
-|------|-------------|
-| `Vec2` | 2D vector with dot, cross, add, sub, scale, len |
-| `RigidBody` | Physical body with position, velocity, angle, angular velocity, mass, inertia |
-| `RigidBody::new(x, y, w, h, mass)` | Create a box at (x,y) with dimensions w×h |
-| `RigidBody::step(&mut self, dt)` | Advance simulation by dt seconds |
-| `RigidBody::apply_impulse(&mut self, impulse, contact)` | Apply force impulse at a contact point |
-| `RigidBody::corners(&self)` | World-space corner positions after rotation |
+### `RigidBody`
+
+```rust
+let mut body = RigidBody::new(x, y, width, height, mass);
+body.step(dt);                           // Advance one timestep
+body.apply_impulse(&impulse, &contact);  // Apply impulse at world-space point
+let corners: [Vec2; 4] = body.corners(); // Get world-space corners
+```
+
+### `Vec2`
+
+2D vector with `dot`, `cross`, `add`, `sub`, `scale`, `len` operations. The 2D cross product returns a scalar: $\mathbf{a} \times \mathbf{b} = a_x b_y - a_y b_x$.
 
 ## Architecture Notes
 
-This crate provides the physics layer for SuperInstance's spatial reasoning. Within the γ + η = C framework (grounding γ, elasticity η, coherence C), rigid body dynamics models **γ** — the physical grounding constraints that govern how virtual objects behave under realistic laws of motion. See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
+The simulation follows the **γ + η = C** conservation pattern: γ (gravational energy input) combined with η (collision impulse dissipation) must conserve the system's total energy budget C. Energy is injected by gravity, dissipated by inelastic collisions ($e = 0.4$) and angular damping, and the remainder is the stable settled state.
+
+The impulse-based approach is equivalent to solving a linear complementarity problem (LCP) at each contact. For multi-contact scenarios, a sequential impulse solver (like Box2D's) iterates over contacts. This implementation handles one contact at a time, which is sufficient for a single bouncing box.
 
 ## References
 
-1. Millington, I. *Game Physics Engine Development*. CRC Press, 2007.
-2. Catto, E. "Iterative Dynamics with Temporal Coherence." GDC 2005.
-3. Featherstone, R. *Rigid Body Dynamics Algorithms*. Springer, 2008.
+- **Chris Hecker**, "Rigid Body Dynamics" series, *Game Developer Magazine* (1996–1997)
+- **Erin Catto**, "Iterative Methods with Rigid Body" GDC presentations (2005–2014)
+- **Box2D** — Erin Catto's 2D physics engine, the industry reference implementation
+- **Kenny Erleben**, *Stable, Robust, and Versatile Multibody Dynamics Animation*, PhD thesis (2004)
 
 ## License
 
-MIT
+MIT OR Apache-2.0
